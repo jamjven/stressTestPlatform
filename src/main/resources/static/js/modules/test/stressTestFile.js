@@ -152,22 +152,31 @@ var vm = new Vue({
             }).trigger("reloadGrid");
         },
         update: function () {
-            var fileId = getSelectedRow();
-            if (fileId == null) {
+            var fileIds = getSelectedRows();
+            if (fileIds == null) {
                 return;
             }
 
-            $.get(baseURL + "test/stressFile/info/" + fileId, function (r) {
-                vm.showList = false;
-                vm.showChart = false;
-                vm.showEdit = true;
-                vm.title = "配置";
-                vm.stressTestFile = r.stressTestFile;
-            });
+            vm.showList = false;
+            vm.showChart = false;
+            vm.showEdit = true;
+            vm.title = "配置";
+            if (fileIds.length > 1) {
+                vm.stressTestFile.reportStatus = 0;
+                vm.stressTestFile.webchartStatus = 0;
+                vm.stressTestFile.debugStatus = 0;
+                // vm.stressTestFile.originName = null;
+                vm.stressTestFile.fileIdList = fileIds;
+            } else {
+                var fileId = fileIds[0];
+                $.get(baseURL + "test/stressFile/info/" + fileId, function (r) {
+                    vm.stressTestFile = r.stressTestFile;
+                });
+            }
         },
         saveOrUpdate: function () {
-            var url = vm.stressTestFile.fileId == null ? "test/stressFile/save" : "test/stressFile/update";
-            ;
+            var url = (vm.stressTestFile.fileId == null && vm.stressTestFile.fileIdList == null)
+                ? "test/stressFile/save" : "test/stressFile/update";
             $.ajax({
                 type: "POST",
                 url: baseURL + url,
@@ -283,11 +292,9 @@ function runOnce(fileIds) {
         success: function (r) {
             if (r.code == 0) {
                 vm.reload();
-                alert('操作成功', function () {
-                });
-            } else {
-                alert(r.msg);
             }
+            alert(r.msg, function () {
+            });
         }
     });
 }

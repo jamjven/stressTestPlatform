@@ -11,7 +11,6 @@ import org.apache.jmeter.util.JMeterUtils;
 import org.apache.jmeter.visualizers.SamplingStatCalculator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -29,7 +28,7 @@ import static io.renren.common.utils.ConfigConstant.OS_NAME_LC;
  * 性能测试的工具类，同时用于读取配置文件。
  * 也可以将性能测试参数配置到系统参数配置中去。
  */
-@ConfigurationProperties(prefix = "test.stress")
+//@ConfigurationProperties(prefix = "test.stress")
 @Component
 public class StressTestUtils {
 
@@ -87,13 +86,13 @@ public class StressTestUtils {
      */
     public static Map<String, String> jMeterStatuses = new HashMap<>();
 
-    private static String jmeterHome;
+//    private static String jmeterHome;
 
-    private String casePath;
+//    private String casePath;
 
-    private boolean useJmeterScript;
+//    private boolean useJmeterScript;
 
-    private boolean replaceFile = true;
+//    private boolean replaceFile = true;
 
     /**
      * Jmeter在Master节点的绝对路径
@@ -118,44 +117,35 @@ public class StressTestUtils {
     public final static String MASTER_JMETER_USE_SCRIPT_KEY = "MASTER_JMETER_USE_SCRIPT_KEY";
 
     /**
+     * 如果配置了本地生成测试报告（不包括调试报告），则使用web程序进程生成测试报告。
+     * 默认是true，即配置为本地web程序进程，好处是可以多线程并发生成测试报告。
+     * 对应的，如果为false则使用Jmeter_home的脚本生成测试报告，无法同时生成多个测试报告。
+     */
+    public final static String MASTER_JMETER_GENERATE_REPORT_KEY = "MASTER_JMETER_GENERATE_REPORT_KEY";
+
+    /**
      * 上传文件时，遇到同名文件是替换还是报错，默认是替换为true
      */
     public final static String MASTER_JMETER_REPLACE_FILE_KEY = "MASTER_JMETER_REPLACE_FILE_KEY";
 
     public static String getJmeterHome() {
-        String value = sysConfigService.getValue(MASTER_JMETER_HOME_KEY);
-        return value == null ? jmeterHome : value;
-    }
-
-    public void setJmeterHome(String jmeterHome) {
-        this.jmeterHome = jmeterHome;
+        return sysConfigService.getValue(MASTER_JMETER_HOME_KEY);
     }
 
     public String getCasePath() {
-        String value = sysConfigService.getValue(MASTER_JMETER_CASES_HOME_KEY);
-        return value == null ? casePath : value;
-    }
-
-    public void setCasePath(String casePath) {
-        this.casePath = casePath;
+        return sysConfigService.getValue(MASTER_JMETER_CASES_HOME_KEY);
     }
 
     public boolean isUseJmeterScript() {
-        String value = sysConfigService.getValue(MASTER_JMETER_USE_SCRIPT_KEY);
-        return value == null ? useJmeterScript : Boolean.valueOf(value);
-    }
-
-    public void setUseJmeterScript(boolean useJmeterScript) {
-        this.useJmeterScript = useJmeterScript;
+        return Boolean.valueOf(sysConfigService.getValue(MASTER_JMETER_USE_SCRIPT_KEY));
     }
 
     public boolean isReplaceFile() {
-        String value = sysConfigService.getValue(MASTER_JMETER_REPLACE_FILE_KEY);
-        return value == null ? replaceFile : Boolean.valueOf(value);
+        return Boolean.valueOf(sysConfigService.getValue(MASTER_JMETER_REPLACE_FILE_KEY));
     }
 
-    public void setReplaceFile(boolean replaceFile) {
-        this.replaceFile = replaceFile;
+    public boolean isMasterGenerateReport() {
+        return Boolean.valueOf(sysConfigService.getValue(MASTER_JMETER_GENERATE_REPORT_KEY));
     }
 
     public static String getSuffix4() {

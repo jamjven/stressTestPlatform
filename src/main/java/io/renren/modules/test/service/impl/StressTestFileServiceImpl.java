@@ -1,6 +1,5 @@
 package io.renren.modules.test.service.impl;
 
-import com.jcraft.jsch.JSchException;
 import io.renren.common.exception.RRException;
 import io.renren.modules.test.dao.*;
 import io.renren.modules.test.entity.*;
@@ -248,6 +247,19 @@ public class StressTestFileServiceImpl implements StressTestFileService {
     }
 
     /**
+     * 批量更新性能测试用例状态
+     */
+    @Override
+    public void updateStatusBatch(StressTestFileEntity stressTestFile) {
+        Map<String, Object> map = new HashMap<>();
+        map.put("fileIdList", stressTestFile.getFileIdList());
+        map.put("reportStatus", stressTestFile.getReportStatus());
+        map.put("webchartStatus", stressTestFile.getWebchartStatus());
+        map.put("debugStatus", stressTestFile.getDebugStatus());
+        stressTestFileDao.updateStatusBatch(map);
+    }
+
+    /**
      * 批量删除
      * 删除所有缓存 + 方法只要调用即删除所有缓存。
      */
@@ -295,10 +307,12 @@ public class StressTestFileServiceImpl implements StressTestFileService {
      */
     @Override
     @Transactional
-    public void run(Long[] fileIds) {
-        Arrays.asList(fileIds).stream().forEach(fileId -> {
-            runSingle(fileId);
-        });
+    public String run(Long[] fileIds) {
+        StringBuilder sb = new StringBuilder();
+        for (Long fileId : fileIds) {
+            sb.append(runSingle(fileId));
+        }
+        return sb.toString();
     }
 
 
@@ -306,9 +320,9 @@ public class StressTestFileServiceImpl implements StressTestFileService {
      * 脚本的启动都是新的线程，其中的SQL是不和启动是同一个事务的。
      * 同理，也不会回滚这一事务。
      */
-    public void runSingle(Long fileId) {
+    public String runSingle(Long fileId) {
         StressTestFileEntity stressTestFile = queryObject(fileId);
-        if (stressTestFile.getStatus() == StressTestUtils.RUNNING) {
+        if (StressTestUtils.RUNNING.equals(stressTestFile.getStatus())) {
             throw new RRException("脚本正在运行");
         }
 
@@ -352,6 +366,10 @@ public class StressTestFileServiceImpl implements StressTestFileService {
         map.put("jmxFile", jmxFile);
         map.put("csvFile", csvFile);
 
+        String slaveStr = getSlaveIPPort();
+        // slaveStr用来做脚本是否是分布式执行的判断，不入库。
+        stressTestFile.setSlaveStr(slaveStr);
+
         if (stressTestUtils.isUseJmeterScript()) {
             excuteJmeterRunByScript(stressTestFile, stressTestReports, map);
         } else {
@@ -366,11 +384,16 @@ public class StressTestFileServiceImpl implements StressTestFileService {
         if (stressTestReports != null) {
             // 将调试测试报告放到调试的数据表中记录
             if (stressTestReports instanceof DebugTestReportsEntity) {
-                debugTestReportsDao.save((DebugTestReportsEntity)stressTestReports);
+                debugTestReportsDao.save((DebugTestReportsEntity) stressTestReports);
             } else {
                 stressTestReportsDao.save(stressTestReports);
             }
         }
+
+        if (StringUtils.isNotEmpty(slaveStr)) {
+            return "分布式压测开始！节点机为：" + slaveStr;
+        }
+        return "master主机压测开始！";
     }
 
     /**
@@ -394,7 +417,7 @@ public class StressTestFileServiceImpl implements StressTestFileService {
         cmdLine.addArgument("-t");
         cmdLine.addArgument("${jmxFile}");
 
-        String slaveStr = getSlaveIPPort();
+        String slaveStr = stressTestFile.getSlaveStr();
         if (StringUtils.isNotEmpty(slaveStr)) {
             cmdLine.addArgument("-R");
             cmdLine.addArgument(slaveStr);
@@ -443,10 +466,13 @@ public class StressTestFileServiceImpl implements StressTestFileService {
         File csvFile = (File) map.get("csvFile");
 
         try {
+            String slaveStr = stressTestFile.getSlaveStr();
+
             stressTestUtils.setJmeterProperties();
-            if (StressTestUtils.NO_NEED_DEBUG.equals(stressTestFile.getDebugStatus())) {
-                stressTestUtils.setJmeterOutputFormat();
-            } else {
+            if (StressTestUtils.NEED_DEBUG.equals(stressTestFile.getDebugStatus())) {
+                if (StringUtils.isNotEmpty(slaveStr)) {//分布式的方式启动
+                    throw new RRException("不支持分布式slave节点的调试！请关闭此脚本的分布式再试一试！");
+                }
                 stressTestUtils.setJmeterOutputFormat();
             }
 
@@ -468,10 +494,6 @@ public class StressTestFileServiceImpl implements StressTestFileService {
 
             HashTree jmxTree = SaveService.loadTree(jmxFile);
             JMeter.convertSubTree(jmxTree);
-
-            String slaveStr = getSlaveIPPort();
-            // slaveStr用来做脚本是否是分布式执行的判断，不入库。
-            stressTestFile.setSlaveStr(slaveStr);
 
             JmeterResultCollector jmeterResultCollector = null;
             // 如果不要监控也不要测试报告，则不加自定义的Collector到文件里，让性能最大化。
@@ -648,7 +670,10 @@ public class StressTestFileServiceImpl implements StressTestFileService {
         stressTestFile.setStatus(StressTestUtils.RUN_SUCCESS);
         // 全面停止之前将测试报告文件从缓存刷到磁盘上去。
         // 避免多脚本执行时停止其中一个脚本而测试报告文件不完整。
-        jmeterResultCollector.flushFile();
+        if (jmeterResultCollector != null) {
+            // 如果关闭报告，则为null
+            jmeterResultCollector.flushFile();
+        }
         if (stressTestReports != null && stressTestReports.getFile().exists()) {
             stressTestReports.setFileSize(FileUtils.sizeOf(stressTestReports.getFile()));
         }
@@ -765,21 +790,9 @@ public class StressTestFileServiceImpl implements StressTestFileService {
 
             SSH2Utils ssh2Util = new SSH2Utils(slave.getIp(), slave.getUserName(),
                     slave.getPasswd(), Integer.parseInt(slave.getSshPort()));
-            try {
-                ssh2Util.initialSession();
-
-                for (Long fileId : fileIds) {
-                    StressTestFileEntity stressTestFile = queryObject(fileId);
-                    putFileToSlave(slave, ssh2Util, stressTestFile);
-                }
-            } catch (JSchException e) {
-                throw new RRException(slave.getSlaveName() + "节点机远程链接初始化时失败！请核对节点机信息路径", e);
-            } finally {
-                try {
-                    ssh2Util.close();
-                } catch (Exception e) {
-                    throw new RRException(slave.getSlaveName() + "节点机远程链接关闭时失败！", e);
-                }
+            for (Long fileId : fileIds) {
+                StressTestFileEntity stressTestFile = queryObject(fileId);
+                putFileToSlave(slave, ssh2Util, stressTestFile);
             }
         }
 
@@ -808,22 +821,13 @@ public class StressTestFileServiceImpl implements StressTestFileService {
 
         // 避免跨系统的问题，远端由于都时linux服务器，则文件分隔符统一为/，不然同步文件会报错。
         String caseFileHome = slave.getHomeDir() + "/bin/stressTestCases";
-        try {
-            String MD5 = ssh2Util.runCommand("md5sum " + getSlaveFileName(stressTestFile, slave) + "|cut -d ' ' -f1");
-            if (fileSaveMD5.equals(MD5)) {//说明目标服务器已经存在相同文件不再重复上传
-                return;
-            }
-
-            //上传文件
-            ssh2Util.scpPutFile(filePath, caseFileHome);
-        } catch (JSchException e) {
-            throw new RRException(stressTestFile.getOriginName() + "校验节点机文件MD5时失败！", e);
-        } catch (IOException e) {
-            throw new RRException(stressTestFile.getOriginName() + "IO传输失败！", e);
+        String MD5 = ssh2Util.runCommand("md5sum " + getSlaveFileName(stressTestFile, slave) + "|cut -d ' ' -f1");
+        if (fileSaveMD5.equals(MD5)) {//说明目标服务器已经存在相同文件不再重复上传
+            return;
         }
-//        catch (SftpException e) {
-//            throw new RRException(stressTestFile.getOriginName() + "上传到节点机文件时失败！", e);
-//        }
+
+        //上传文件
+        ssh2Util.scpPutFile(filePath, caseFileHome);
 
         stressTestFile.setStatus(StressTestUtils.RUN_SUCCESS);
         //由于事务性，这个地方不好批量更新。
@@ -892,21 +896,7 @@ public class StressTestFileServiceImpl implements StressTestFileService {
 
             SSH2Utils ssh2Util = new SSH2Utils(slave.getIp(), slave.getUserName(),
                     slave.getPasswd(), Integer.parseInt(slave.getSshPort()));
-
-            try {
-                ssh2Util.initialSession();
-                ssh2Util.runCommand("rm -f " + getSlaveFileName(stressTestFile, slave));
-            } catch (JSchException e) {
-                throw new RRException(slave.getSlaveName() + "节点机远程链接初始化时失败！请核对节点机信息路径", e);
-            } catch (IOException e) {
-                throw new RRException(slave.getSlaveName() + "删除远程文件命令执行失败!", e);
-            } finally {
-                try {
-                    ssh2Util.close();
-                } catch (Exception e) {
-                    throw new RRException(slave.getSlaveName() + "节点机远程链接关闭时失败！", e);
-                }
-            }
+            ssh2Util.runCommand("rm -f " + getSlaveFileName(stressTestFile, slave));
         }
 
         stressTestFileDao.deleteBatch(fileDeleteIds.toArray());

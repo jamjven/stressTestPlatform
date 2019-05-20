@@ -66,7 +66,11 @@ public class StressTestFileController {
     public R update(@RequestBody StressTestFileEntity stressTestFile) {
         ValidatorUtils.validateEntity(stressTestFile);
 
-        stressTestFileService.update(stressTestFile);
+        if (stressTestFile.getFileIdList() != null && stressTestFile.getFileIdList().length > 0) {
+            stressTestFileService.updateStatusBatch(stressTestFile);
+        } else {
+            stressTestFileService.update(stressTestFile);
+        }
 
         return R.ok();
     }
@@ -90,9 +94,7 @@ public class StressTestFileController {
     @RequestMapping("/runOnce")
     @RequiresPermissions("test:stress:runOnce")
     public R run(@RequestBody Long[] fileIds) {
-
-        stressTestFileService.run(fileIds);
-        return R.ok();
+        return R.ok(stressTestFileService.run(fileIds));
     }
 
     /**
